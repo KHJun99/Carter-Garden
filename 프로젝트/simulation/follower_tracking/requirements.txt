@@ -1,0 +1,13 @@
+# [Core Environment - Golden Balance for ROS 2 Humble]
+numpy==1.26.4
+opencv-python==4.8.1.78
+opencv-python-headless==4.8.1.78
+matplotlib==3.8.4
+
+# [AI & Tracking]
+ultralytics
+insightface
+onnxruntime-gpu  # CPU만 쓰면 onnxruntime으로 변경
+torch
+torchvision
+scipy>=1.10.0

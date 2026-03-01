@@ -1,0 +1,372 @@
+import rclpy
+from rclpy.node import Node
+from rclpy.duration import Duration
+from rclpy.action import ActionClient 
+from rclpy.qos import QoSProfile, QoSPresetProfiles
+from sensor_msgs.msg import LaserScan
+from vision_msgs.msg import Detection2DArray
+from geometry_msgs.msg import Twist, PoseStamped, PointStamped
+from nav_msgs.msg import OccupancyGrid
+from nav2_msgs.action import ComputePathToPose
+from nav2_simple_commander.robot_navigator import BasicNavigator, TaskResult
+from enum import Enum
+import math
+import numpy as np
+from tf2_ros import Buffer, TransformListener, LookupException, ConnectivityException, ExtrapolationException
+import tf2_geometry_msgs
+
+# ================= Configuration =================
+TARGET_DISTANCE = 0.8        # 목표 거리 (m)
+OBSTACLE_CHECK_DIST = 1.0    # 장애물 감지 시작 거리
+CLOSE_PROXIMITY_LIMIT = 0.15 # 비상 정지 거리
+MAX_LINEAR_VEL = 0.3         # 최대 직진 속도 (부드러운 주행을 위해 약간 하향)
+
+# [Smooth Control Parameters] 진동 억제 최적화
+MAX_ROTATION_SPEED = 0.5     # 최대 회전 속도 (1.0 -> 0.5 대폭 하향: 확 돌지 않게)
+PID_KP = 0.6                 # P 게인 (1.5 -> 0.6: 천천히 부드럽게 반응)
+PID_KI = 0.0                 # I
+PID_KD = 0.05                # D 게인
+
+ROTATION_DEADBAND = 5.0      # 데드밴드 (±5도 이내는 회전 안 함 -> 직진성 강화)
+LIDAR_AVOIDANCE_WEIGHT = 0.6 # 장애물 회피 가중치 (0.8 -> 0.6: 너무 민감하게 피하지 않게)
+ANGLE_SMOOTHING_ALPHA = 0.3  # 스무딩 (0.9 -> 0.3: 노이즈 필터링 강화)
+
+class FollowState(Enum):
+    WAITING = 0          
+    VISUAL_TRACKING = 1  
+    BLIND_TRACKING = 2   
+    RECOVERY = 3         
+    SEARCHING = 4        
+
+class PIDController:
+    def __init__(self, kp, ki, kd):
+        self.kp = kp
+        self.ki = ki
+        self.kd = kd
+        self.prev_error = 0.0
+
+    def compute(self, error, dt):
+        derivative = (error - self.prev_error) / dt if dt > 0 else 0.0
+        self.prev_error = error
+        return (self.kp * error) + (self.kd * derivative)
+
+    def reset(self):
+        self.prev_error = 0.0
+
+class CarterFollower(Node):
+    def __init__(self):
+        super().__init__('carter_follower')
+
+        # 1. Nav2 & TF
+        self.navigator = BasicNavigator()
+        self.tf_buffer = Buffer()
+        self.tf_listener = TransformListener(self.tf_buffer, self)
+
+        # 2. Parameters
+        self.img_width = 640
+        self.camera_fov = 62.2
+        self.visual_timeout = 1.0  # 너무 짧으면 불안정하므로 1.0초로 복구
+        self.blind_timeout = 3.0   
+        
+        # 3. State Variables
+        self.state = FollowState.WAITING
+        self.last_visual_time = self.get_clock().now()
+        self.target_pos = {'dist': None, 'angle': None, 'angle_width': 10.0} 
+        
+        # Map Data
+        self.map_data = None
+        self.map_info = None
+
+        # Logic Control
+        self.pid_controller = PIDController(PID_KP, PID_KI, PID_KD)
+        self.last_loop_time = self.get_clock().now()
+        self.last_known_map_pose = None 
+        self.recovery_start_time = None
+
+        # 4. Communication
+        # 부드러운 주행을 위해 Reliable도 괜찮지만, 최신성 유지를 위해 SensorData 유지
+        qos_policy = QoSPresetProfiles.SENSOR_DATA.value
+
+        self.create_subscription(Detection2DArray, '/detections', self.yolo_callback, qos_policy)
+        self.create_subscription(LaserScan, '/scan', self.scan_callback, qos_policy)
+        self.create_subscription(OccupancyGrid, '/map', self.map_callback, 10)
+        self.cmd_pub = self.create_publisher(Twist, '/cmd_vel', 10)
+
+        self.timer = self.create_timer(0.1, self.control_loop) # 10Hz (너무 빠르면 진동 유발, 20Hz -> 10Hz)
+        self.get_logger().info('>>> Carter Hybrid Follower (Smooth & Stable) Ready')
+
+    def map_callback(self, msg):
+        self.map_info = msg.info
+        self.map_data = np.array(msg.data, dtype=np.int8).reshape((msg.info.height, msg.info.width))
+
+    def is_static_obstacle(self, dist, angle_deg):
+        if self.map_data is None or self.map_info is None: return False
+        
+        angle_rad = math.radians(angle_deg)
+        x_local = dist * math.cos(angle_rad)
+        y_local = dist * math.sin(angle_rad)
+
+        try:
+            point_local = PointStamped()
+            point_local.header.frame_id = "base_scan"
+            point_local.header.stamp = self.get_clock().now().to_msg()
+            point_local.point.x = x_local
+            point_local.point.y = y_local
+
+            transform = self.tf_buffer.lookup_transform("map", "base_scan", rclpy.time.Time(), rclpy.duration.Duration(seconds=0.05))
+            point_map = tf2_geometry_msgs.do_transform_point(point_local, transform)
+            
+            resolution = self.map_info.resolution
+            origin_x = self.map_info.origin.position.x
+            origin_y = self.map_info.origin.position.y
+            
+            mx = int((point_map.point.x - origin_x) / resolution)
+            my = int((point_map.point.y - origin_y) / resolution)
+            
+            if 0 <= mx < self.map_info.width and 0 <= my < self.map_info.height:
+                if self.map_data[my, mx] > 50: return True
+            return False
+        except Exception:
+            return False
+
+    def yolo_callback(self, msg):
+        owner_detected = False
+        new_angle = 0.0
+        
+        for det in msg.detections:
+            if int(det.id) >= 1000: 
+                px = det.bbox.center.position.x
+                bw = det.bbox.size_x
+                new_angle = -((px - (self.img_width / 2)) / self.img_width) * self.camera_fov
+                new_width = (bw / self.img_width) * self.camera_fov
+                owner_detected = True
+                self.target_pos['angle_width'] = new_width
+                break
+        
+        curr_time = self.get_clock().now()
+        
+        if owner_detected:
+            if self.state in [FollowState.RECOVERY, FollowState.SEARCHING, FollowState.WAITING]:
+                self.get_logger().info(">>> 타겟 발견! 부드러운 추적 시작.")
+                self.navigator.cancelTask()
+                self.pid_controller.reset()
+            
+            self.state = FollowState.VISUAL_TRACKING
+            self.last_visual_time = curr_time
+            
+            # [Smooth] 지수 이동 평균(EMA) 필터 적용 (노이즈 제거)
+            if self.target_pos['angle'] is None:
+                self.target_pos['angle'] = new_angle
+            else:
+                self.target_pos['angle'] = (ANGLE_SMOOTHING_ALPHA * new_angle) + \
+                                           ((1.0 - ANGLE_SMOOTHING_ALPHA) * self.target_pos['angle'])
+        else:
+            if self.state == FollowState.WAITING: return
+            time_diff = (curr_time - self.last_visual_time).nanoseconds / 1e9
+            
+            if time_diff > self.blind_timeout:
+                if self.state != FollowState.RECOVERY and self.state != FollowState.SEARCHING:
+                    self.get_logger().warn(">>> 타겟 소실. Nav2 Recovery 시작.")
+                    self.state = FollowState.RECOVERY
+                    self.recovery_start_time = curr_time
+                    self.navigator.cancelTask()
+                    self.execute_recovery_nav2()
+            elif time_diff > self.visual_timeout:
+                self.state = FollowState.BLIND_TRACKING
+
+    def scan_callback(self, msg):
+        self.current_ranges = msg.ranges
+        
+        if self.state == FollowState.VISUAL_TRACKING:
+            angle = self.target_pos.get('angle')
+            angle_w = self.target_pos.get('angle_width', 10.0)
+            
+            if angle is not None:
+                search_range = max(5, int(angle_w / 2) + 2)
+                idx = int(angle) % 360
+                
+                valid_dists = []
+                for i in range(idx - search_range, idx + search_range + 1):
+                    d = msg.ranges[i % 360]
+                    if 0.15 < d < 8.0:
+                        if not self.is_static_obstacle(d, float(i)):
+                            valid_dists.append(d)
+                
+                if valid_dists:
+                    # 거리값도 부드럽게 필터링
+                    raw_dist = min(valid_dists)
+                    if self.target_pos['dist'] is None:
+                        self.target_pos['dist'] = raw_dist
+                    else:
+                        self.target_pos['dist'] = 0.7 * raw_dist + 0.3 * self.target_pos['dist']
+                else:
+                    na, nd = self.find_nearest_neighbor(msg.ranges)
+                    if na is not None: self.target_pos['dist'] = nd
+
+        elif self.state == FollowState.BLIND_TRACKING:
+            na, nd = self.find_nearest_neighbor(msg.ranges)
+            if na is not None:
+                self.target_pos['angle'] = na
+                self.target_pos['dist'] = nd
+
+    def find_nearest_neighbor(self, ranges):
+        last_angle = self.target_pos['angle']
+        last_dist = self.target_pos['dist']
+        if last_angle is None or last_dist is None: return None, None
+        
+        search_range = 30 # 검색 범위 축소 (오인식 방지)
+        best_angle, min_diff = None, 999.0
+        
+        start = int(last_angle) - search_range
+        end = int(last_angle) + search_range
+
+        for i in range(start, end):
+            d = ranges[i % 360]
+            if not (0.1 < d < 10.0): continue
+            if self.is_static_obstacle(d, float(i)): continue
+
+            diff = abs(d - last_dist)
+            if diff < min_diff and diff < 0.5: # 0.5m 이내만 인정
+                min_diff = diff
+                best_angle = float(i)
+                if best_angle > 180: best_angle -= 360
+                
+        if best_angle is not None:
+            return best_angle, ranges[int(best_angle)%360]
+        return None, None
+
+    def calculate_potential_field(self, target_angle, target_dist):
+        # Attraction
+        attract_x = math.cos(math.radians(target_angle)) * 2.0
+        attract_y = math.sin(math.radians(target_angle)) * 2.0
+
+        # Repulsion
+        repulse_x, repulse_y = 0.0, 0.0
+        if hasattr(self, 'current_ranges'):
+            for i in range(-50, 51): # 전방 100도
+                d = self.current_ranges[i % 360]
+                if 0.1 < d < OBSTACLE_CHECK_DIST:
+                    force = (OBSTACLE_CHECK_DIST - d) ** 2
+                    rad = math.radians(i)
+                    repulse_x -= math.cos(rad) * force
+                    repulse_y -= math.sin(rad) * force
+
+        total_x = attract_x + (repulse_x * LIDAR_AVOIDANCE_WEIGHT)
+        total_y = attract_y + (repulse_y * LIDAR_AVOIDANCE_WEIGHT)
+        
+        return math.degrees(math.atan2(total_y, total_x))
+
+    def drive_direct(self):
+        if self.target_pos['dist'] is None or self.target_pos['angle'] is None: return
+
+        # 1. 목표 각도 계산 (Potential Field)
+        target_angle_corr = self.calculate_potential_field(self.target_pos['angle'], self.target_pos['dist'])
+        
+        # [Smooth] Deadband: ±5도 이내면 0으로 간주 (직진 유지)
+        if abs(target_angle_corr) < ROTATION_DEADBAND:
+            target_angle_corr = 0.0
+
+        now = self.get_clock().now()
+        dt = (now - self.last_loop_time).nanoseconds / 1e9
+        if dt <= 0: dt = 0.1
+        self.last_loop_time = now
+
+        # 2. Angular Velocity (PID)
+        error_rad = math.radians(target_angle_corr)
+        angular_z = self.pid_controller.compute(error_rad, dt)
+        
+        # [Smooth] 회전 속도 제한 (부드러운 회전)
+        angular_z = max(min(angular_z, MAX_ROTATION_SPEED), -MAX_ROTATION_SPEED)
+
+        # 3. Linear Velocity
+        dist_error = self.target_pos['dist'] - TARGET_DISTANCE
+        linear_x = 0.0
+
+        front_min = min([self.current_ranges[i] for i in range(-15, 16) if 0.1 < self.current_ranges[i%360] < 10.0], default=9.9)
+
+        if front_min < 0.35: # 충돌 방지 여유 거리 확보
+            linear_x = 0.0
+        elif dist_error > 0:
+            # [Smooth] 각도가 크면 속도를 줄임 (Curve Slowdown)
+            turn_slowdown = max(0.2, 1.0 - (abs(target_angle_corr) / 60.0))
+            linear_x = min(dist_error * 0.5, MAX_LINEAR_VEL) * turn_slowdown # P게인 0.5로 하향
+        
+        twist = Twist()
+        twist.linear.x = linear_x
+        twist.angular.z = angular_z
+        self.cmd_pub.publish(twist)
+
+    def execute_recovery_nav2(self):
+        self.save_global_target_pose() 
+
+        if self.last_known_map_pose:
+            gx, gy = self.last_known_map_pose
+            self.get_logger().info(f">>> [RECOVERY] Nav2 Goal: ({gx:.2f}, {gy:.2f})")
+            
+            goal = PoseStamped()
+            goal.header.frame_id = 'map'
+            goal.header.stamp = self.navigator.get_clock().now().to_msg()
+            goal.pose.position.x = gx
+            goal.pose.position.y = gy
+            goal.pose.orientation.w = 1.0
+            
+            self.navigator.goToPose(goal)
+        else:
+            self.state = FollowState.SEARCHING
+
+    def save_global_target_pose(self):
+        dist = self.target_pos['dist']
+        angle = self.target_pos['angle']
+        if dist is None or angle is None: return
+
+        angle_rad = math.radians(angle)
+        x_local = dist * math.cos(angle_rad)
+        y_local = dist * math.sin(angle_rad)
+        try:
+            trans = self.tf_buffer.lookup_transform("map", "base_scan", rclpy.time.Time())
+            q = trans.transform.rotation
+            siny_cosp = 2 * (q.w * q.z + q.x * q.y)
+            cosy_cosp = 1 - 2 * (q.y * q.y + q.z * q.z)
+            yaw = math.atan2(siny_cosp, cosy_cosp)
+            
+            mx = trans.transform.translation.x + (x_local * math.cos(yaw) - y_local * math.sin(yaw))
+            my = trans.transform.translation.y + (x_local * math.sin(yaw) + y_local * math.cos(yaw))
+            
+            self.last_known_map_pose = (mx, my)
+        except Exception: pass
+
+    def control_loop(self):
+        if self.state in [FollowState.VISUAL_TRACKING, FollowState.BLIND_TRACKING]:
+            self.save_global_target_pose() 
+            self.drive_direct()
+
+        elif self.state == FollowState.RECOVERY:
+            if self.navigator.isTaskComplete():
+                result = self.navigator.getResult()
+                if result == TaskResult.SUCCEEDED:
+                    self.get_logger().info(">>> 복구 완료. 탐색 시작.")
+                elif result == TaskResult.FAILED:
+                    self.get_logger().warn(">>> 복구 실패 (경로 막힘). 탐색 시작.")
+                self.state = FollowState.SEARCHING
+        
+        elif self.state == FollowState.SEARCHING:
+            twist = Twist()
+            twist.angular.z = 0.4 # 천천히 회전
+            self.cmd_pub.publish(twist)
+        
+        elif self.state == FollowState.WAITING:
+            self.cmd_pub.publish(Twist())
+
+def main():
+    rclpy.init()
+    node = CarterFollower()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
+
+if __name__ == '__main__':
+    main()

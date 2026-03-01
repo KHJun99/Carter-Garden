@@ -1,0 +1,15 @@
+flask
+flask-sqlalchemy
+flask-cors
+pymysql
+boto3
+python-dotenv
+cryptography
+flasgger
+flask-marshmallow
+marshmallow-sqlalchemy
+Flask-Migrate
+flask-jwt-extended
+werkzeug
+marshmallow
+requests

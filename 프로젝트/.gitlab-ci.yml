@@ -1,0 +1,32 @@
+stages:
+  - deploy
+
+deploy-local:
+  stage: deploy
+  script:
+    - echo "EC2 내부에서 직접 배포를 시작합니다..."
+    
+    # 1. 최신 코드 복사 (venv는 복사되지 않음)
+    - cp -Ru * /home/ubuntu/server-app/
+    
+    # 2. Backend 폴더로 이동
+    - cd /home/ubuntu/server-app/smart-cart-web/backend
+    
+    # 3. [핵심 수정] 가상환경이 없으면 생성, 있으면 그대로 둠
+    # venv 폴더가 없을 때만 생성하도록 설정
+    - if [ ! -d "venv" ]; then python3 -m venv venv; fi
+    
+    # 4. 가상환경 활성화 (이제 venv가 있으므로 에러 안 남)
+    - source venv/bin/activate
+    
+    # 5. 필수 라이브러리 설치
+    - pip install -r requirements.txt
+    
+    # 6. 기존 서버 종료 및 재실행
+    - pkill -f 'python run.py' || true
+    - nohup python run.py > flask.log 2>&1 &
+    
+    - echo "배포 완료! Flask 서버가 정상적으로 실행되었습니다."
+    
+  only:
+    - master

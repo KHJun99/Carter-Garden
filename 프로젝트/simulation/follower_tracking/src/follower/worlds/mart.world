@@ -1,0 +1,112 @@
+<?xml version="1.0" ?>
+<sdf version='1.7'>
+  <world name='default'>
+    <include><uri>model://sun</uri></include>
+    <include><uri>model://ground_plane</uri></include>
+
+    <model name='wall_south'>
+      <static>1</static>
+      <pose>0 -2.085 0.5 0 0 0</pose> <link name='link'>
+        <collision name='c'><geometry><box><size>3.45 0.15 1.0</size></box></geometry></collision>
+        <visual name='v'><geometry><box><size>3.45 0.15 1.0</size></box></geometry><material><script><name>Gazebo/Black</name></script></material></visual>
+      </link>
+    </model>
+
+<<<<<<< HEAD
+    <include><name>s_tl</name><uri>models://blue_shelf</uri><pose>-0.77 0.83 0 0 0 1.5708</pose></include>
+    <include><name>s_tr</name><uri>models://blue_shelf</uri><pose>0.28 0.83 0 0 0 1.5708</pose></include>
+    <include><name>s_bl</name><uri>models://blue_shelf</uri><pose>-0.77 -0.77 0 0 0 1.5708</pose></include>
+    <include><name>s_br</name><uri>models://blue_shelf</uri><pose>0.28 -0.77 0 0 0 1.5708</pose></include>
+=======
+    <model name='wall_north'>
+      <static>1</static>
+      <pose>0 2.085 0.5 0 0 0</pose> <link name='link'>
+        <collision name='c'><geometry><box><size>3.45 0.15 1.0</size></box></geometry></collision>
+        <visual name='v'><geometry><box><size>3.45 0.15 1.0</size></box></geometry><material><script><name>Gazebo/Black</name></script></material></visual>
+      </link>
+    </model>
+
+    <model name='wall_west'>
+      <static>1</static>
+      <pose>-1.725 0 0.5 0 0 0</pose> <link name='link'>
+        <collision name='c'><geometry><box><size>0.15 4.32 1.0</size></box></geometry></collision>
+        <visual name='v'><geometry><box><size>0.15 4.32 1.0</size></box></geometry><material><script><name>Gazebo/Black</name></script></material></visual>
+      </link>
+    </model>
+
+    <model name='wall_east_fixed'>
+      <static>1</static>
+      <pose>1.725 1.46 0.5 0 0 0</pose> <link name='link'>
+        <collision name='c'><geometry><box><size>0.15 1.1 1.0</size></box></geometry></collision>
+        <visual name='v'><geometry><box><size>0.15 1.1 1.0</size></box></geometry><material><script><name>Gazebo/Black</name></script></material></visual>
+      </link>
+    </model>
+
+    <model name='virtual_wall_center'>
+      <static>1</static>
+      <pose>1.725 -0.5 0.5 0 0 0</pose>
+      <link name='link'>
+        <collision name='c'><geometry><box><size>0.15 1.22 1.0</size></box></geometry></collision>
+      </link>
+    </model>
+
+    <model name='virtual_wall_corridor_end'>
+      <static>1</static>
+      <pose>2.925 -0.55 0.5 0 0 0</pose>
+      <link name='link'>
+        <collision name='c'><geometry><box><size>0.15 2.92 1.0</size></box></geometry></collision>
+      </link>
+    </model>
+
+    <model name='virtual_wall_corridor_top'>
+      <static>1</static>
+      <pose>2.325 0.985 0.5 0 0 0</pose>
+      <link name='link'><collision name='c'><geometry><box><size>1.2 0.15 1.0</size></box></geometry></collision></link>
+    </model>
+    <model name='virtual_wall_corridor_bottom'>
+      <static>1</static>
+      <pose>2.325 -2.085 0.5 0 0 0</pose>
+      <link name='link'><collision name='c'><geometry><box><size>1.2 0.15 1.0</size></box></geometry></collision></link>
+    </model>
+
+    <model name='blue_shelf'>
+      <static>1</static>
+      <pose>-0.77 0.83 0.25 0 0 0</pose>
+      <link name='link'>
+        <collision name='c'><geometry><box><size>0.34 0.72 0.5</size></box></geometry></collision>
+        <visual name='v'><geometry><box><size>0.34 0.72 0.5</size></box></geometry><material><script><name>Gazebo/Blue</name></script></material></visual>
+      </link>
+    </model>
+    <model name='blue_shelf_0'>
+      <static>1</static>
+      <pose>0.28 0.83 0.25 0 0 0</pose>
+      <link name='link'>
+        <collision name='c'><geometry><box><size>0.34 0.72 0.5</size></box></geometry></collision>
+        <visual name='v'><geometry><box><size>0.34 0.72 0.5</size></box></geometry><material><script><name>Gazebo/Blue</name></script></material></visual>
+      </link>
+    </model>
+    <model name='blue_shelf_1'>
+      <static>1</static>
+      <pose>-0.77 -0.77 0.25 0 0 0</pose>
+      <link name='link'>
+        <collision name='c'><geometry><box><size>0.34 0.72 0.5</size></box></geometry></collision>
+        <visual name='v'><geometry><box><size>0.34 0.72 0.5</size></box></geometry><material><script><name>Gazebo/Blue</name></script></material></visual>
+      </link>
+    </model>
+    <model name='blue_shelf_2'>
+      <static>1</static>
+      <pose>0.28 -0.77 0.25 0 0 0</pose>
+      <link name='link'>
+        <collision name='c'><geometry><box><size>0.34 0.72 0.5</size></box></geometry></collision>
+        <visual name='v'><geometry><box><size>0.34 0.72 0.5</size></box></geometry><material><script><name>Gazebo/Blue</name></script></material></visual>
+      </link>
+    </model>
+
+    <scene>
+      <ambient>0.4 0.4 0.4 1</ambient>
+      <background>0.7 0.7 0.7 1</background>
+      <shadows>1</shadows>
+    </scene>
+>>>>>>> 160d30744c90434d86a591d44c100329cdf87698
+  </world>
+</sdf>

@@ -1,0 +1,59 @@
+﻿{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "1. 다리 (Odom)",
+            "type": "shell",
+            "command": "source /opt/ros/humble/setup.bash && source ~/ros2_ws/install/setup.bash && python3 ~/S14P11D201/jetson/jetson_vehicle_control/5_odom_publisher.py",
+            "presentation": { "group": "robot", "reveal": "always", "panel": "new" }
+        },
+        {
+            "label": "2. 눈 (LiDAR)",
+            "type": "shell",
+            "command": "source /opt/ros/humble/setup.bash && source ~/ros2_ws/install/setup.bash && ros2 launch ydlidar_ros2_driver ydlidar_launch.py",
+            "presentation": { "group": "robot", "reveal": "always", "panel": "new" }
+        },
+        {
+            "label": "3. 뇌 (IMU+EKF)",
+            "type": "shell",
+            "command": "source /opt/ros/humble/setup.bash && source ~/ros2_ws/install/setup.bash && ros2 launch simple_imu imu_ekf_launch.py",
+            "presentation": { "group": "robot", "reveal": "always", "panel": "new" }
+        },
+        {
+            "label": "4. 관절 (TF)",
+            "type": "shell",
+            "command": "source /opt/ros/humble/setup.bash && source ~/ros2_ws/install/setup.bash && ros2 run tf2_ros static_transform_publisher 0.1 0 0.2 0 0 0 base_link laser_frame",
+            "presentation": { "group": "robot", "reveal": "always", "panel": "new" }
+        },
+        {
+            "label": "5. 나머지 하드웨어 (Camera + URDF + Footprint)",
+            "type": "shell",
+            "command": "source /opt/ros/humble/setup.bash && cd ~/S14P11D201/jetson/orin_nano_runtime && ros2 launch ./robot_hardware.launch.py",
+            "presentation": { "group": "robot_ext", "reveal": "always", "panel": "new" }
+        },
+        {
+            "label": "6. 네비게이션 (Nav2 + Web + Map)",
+            "type": "shell",
+            "command": "source /opt/ros/humble/setup.bash && cd ~/S14P11D201/jetson/orin_nano_runtime && ros2 launch ./robot_nav.launch.py",
+            "presentation": { "group": "robot_ext", "reveal": "always", "panel": "new" }
+        },
+        {
+            "label": "7. 애플리케이션 (My Code)",
+            "type": "shell",
+            "command": "source /opt/ros/humble/setup.bash && cd ~/S14P11D201/jetson/orin_nano_runtime && ros2 launch ./robot_app.launch.py",
+            "presentation": { "group": "robot_ext", "reveal": "always", "panel": "new" }
+        },
+        {
+            "label": "Docker 실행 전 (1 ~ 5)",
+            "dependsOn": ["1. 다리 (Odom)", "2. 눈 (LiDAR)", "3. 뇌 (IMU+EKF)", "4. 관절 (TF)", "5. 나머지 하드웨어 (Camera + URDF + Footprint)"],
+            "problemMatcher": [],
+            "group": { "kind": "build", "isDefault": true }
+        },
+        {
+            "label": "Docker 실행 후 (6 ~ 7)",
+            "dependsOn": ["6. 네비게이션 (Nav2 + Web + Map)", "7. 애플리케이션 (My Code)"],
+            "problemMatcher": [],
+            "group": { "kind": "build", "isDefault": false }
+        }
+    ]
+}

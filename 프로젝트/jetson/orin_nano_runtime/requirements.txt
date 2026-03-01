@@ -1,0 +1,10 @@
+adafruit-circuitpython-pca9685
+adafruit-circuitpython-motor
+ultralytics
+opencv-python
+pynput
+numpy<2
+matplotlib==3.8.0
+rclpy
+ros-humble-livox-ros-driver2
+insightface
